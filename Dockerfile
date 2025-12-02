@@ -2,12 +2,10 @@ FROM node:18
 
 WORKDIR /app
 
-COPY package.json .
+COPY package.json ./
 
 RUN npm install --legacy-peer-deps
 
 COPY . .
-
-EXPOSE 10000
 
 CMD ["npm", "start"]
