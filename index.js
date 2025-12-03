@@ -1,7 +1,7 @@
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
+require("dotenv").config();
+const express = require("express");
+const bodyParser = require("body-parser");
+const cors = require("cors");
 
 const {
   Connection,
@@ -9,27 +9,33 @@ const {
   Keypair,
   LAMPORTS_PER_SOL,
   Transaction
-} = require('@solana/web3.js');
+} = require("@solana/web3.js");
 
 const {
   getOrCreateAssociatedTokenAccount,
   createTransferInstruction,
   TOKEN_PROGRAM_ID
-} = require('@solana/spl-token');
+} = require("@solana/spl-token");
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// -----------------------------
-//  CONFIG + INITIALIZATION
-// -----------------------------
+// --------------------------------------------------------
+// 100% RENDER FIX → force HTTP rpc, disable websockets
+// --------------------------------------------------------
+const connection = new Connection(process.env.RPC, {
+  commitment: "confirmed",
+  disableRetryOnRateLimit: true,
+  wsEndpoint: undefined   // <-- prevents Render WebSocket crash
+});
 
-const RPC = process.env.RPC;
-const connection = new Connection(RPC, "confirmed");
-
-const presaleSecret = JSON.parse(process.env.PRESALE_WALLET_SECRET);
-const presaleKeypair = Keypair.fromSecretKey(new Uint8Array(presaleSecret));
+// --------------------------------------------------------
+// Wallet + config
+// --------------------------------------------------------
+const presaleKeypair = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(process.env.PRESALE_WALLET_SECRET))
+);
 
 const presalePubkey = new PublicKey(process.env.PRESALE_WALLET_PUBKEY);
 const mint = new PublicKey(process.env.MINT_ADDRESS);
@@ -37,47 +43,47 @@ const mint = new PublicKey(process.env.MINT_ADDRESS);
 const DECIMALS = parseInt(process.env.DECIMALS);
 const TOKENS_PER_SOL = BigInt(process.env.TOKENS_PER_SOL);
 
-// -----------------------------
-//  PAYMENT VERIFICATION
-// -----------------------------
+// --------------------------------------------------------
+// Verify SOL payment
+// --------------------------------------------------------
 async function verifyPayment(signature) {
-  try {
-    const tx = await connection.getTransaction(signature, { commitment: 'confirmed' });
-    if (!tx || !tx.meta) return null;
+  const tx = await connection.getTransaction(signature, {
+    commitment: "confirmed"
+  });
 
-    const keys = tx.transaction.message.accountKeys.map(k => k.toString());
-    const idx = keys.indexOf(presalePubkey.toString());
-    if (idx === -1) return null;
+  if (!tx || !tx.meta) return null;
 
-    const pre = tx.meta.preBalances[idx];
-    const post = tx.meta.postBalances[idx];
-    const lamports = post - pre;
+  const keys = tx.transaction.message.accountKeys.map(k => k.toString());
+  const idx = keys.indexOf(presalePubkey.toString());
+  if (idx === -1) return null;
 
-    if (lamports <= 0) return null;
+  const pre = tx.meta.preBalances[idx];
+  const post = tx.meta.postBalances[idx];
+  const lamports = post - pre;
 
-    return lamports;
-  } catch (err) {
-    console.error("verifyPayment error:", err);
-    return null;
-  }
+  if (lamports <= 0) return null;
+
+  return lamports;
 }
 
-// -----------------------------
-//  VERIFY + SEND TOKENS
-// -----------------------------
-app.post('/verify', async (req, res) => {
+// --------------------------------------------------------
+// API Endpoint
+// --------------------------------------------------------
+app.post("/verify", async (req, res) => {
   try {
     const { signature, buyer } = req.body;
-    if (!signature || !buyer)
-      return res.status(400).json({ error: "Missing signature or buyer address" });
 
     const lamports = await verifyPayment(signature);
-    if (!lamports) 
-      return res.status(400).json({ error: "Invalid payment" });
+    if (!lamports)
+      return res.status(400).send({ error: "Invalid payment" });
 
     const buyerPubkey = new PublicKey(buyer);
 
-    const tokens = (BigInt(lamports) * TOKENS_PER_SOL * BigInt(10 ** DECIMALS)) / BigInt(LAMPORTS_PER_SOL);
+    const tokens =
+      (BigInt(lamports) *
+        TOKENS_PER_SOL *
+        BigInt(10 ** DECIMALS)) /
+      BigInt(LAMPORTS_PER_SOL);
 
     const buyerAta = await getOrCreateAssociatedTokenAccount(
       connection,
@@ -105,19 +111,19 @@ app.post('/verify', async (req, res) => {
     const tx = new Transaction().add(ix);
     const txid = await connection.sendTransaction(tx, [presaleKeypair]);
 
-    return res.json({ success: true, txid });
+    res.send({ success: true, txid });
 
-  } catch (err) {
-    console.error("verify route error:", err);
-    return res.status(500).json({ error: err.message });
+  } catch (e) {
+    console.log(e);
+    res.status(500).send({ error: e.message });
   }
 });
 
-// -----------------------------
-//  START SERVER (REQUIRED FOR RENDER)
-// -----------------------------
+// --------------------------------------------------------
+// MUST LISTEN ON process.env.PORT FOR RENDER
+// --------------------------------------------------------
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
+  console.log("Backend running on port " + PORT);
 });
